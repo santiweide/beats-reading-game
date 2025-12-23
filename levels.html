@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beat It Out! - Level Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        input[type="range"] {
+            accent-color: rgb(147 51 234);
+        }
+        @keyframes pulse-custom {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+        .animate-pulse-slow {
+            animation: pulse-custom 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import React, { useEffect, useMemo, useRef, useState, useCallback } from "https://esm.sh/react@18.3.1";
+        import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+
+        // ============================================================
+        // 1) 关卡素材池 (Level Map)
+        // 结构: Map<Level, Map<Label, ImageSrc>>
+        // ============================================================
+        const LEVEL_RESOURCES = {
+            1: {
+                "猫咪": "https://images.unsplash.com/photo-1529778873920-4da4926a72c2?w=400&q=80",
+                "小狗": "https://images.unsplash.com/photo-1582456891925-a53965520520?w=400&q=80",
+            },
+            2: {
+                "狐狸": "https://images.unsplash.com/photo-1474511320723-9a536ad7bc1b?w=400&q=80",
+                "兔子": "https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?w=400&q=80",
+                "猫咪": "https://images.unsplash.com/photo-1529778873920-4da4926a72c2?w=400&q=80",
+                "小狗": "https://images.unsplash.com/photo-1582456891925-a53965520520?w=400&q=80",
+            },
+            3: {
+                "狐狸": "https://images.unsplash.com/photo-1474511320723-9a536ad7bc1b?w=400&q=80",
+                "兔子": "https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?w=400&q=80",
+                "猫咪": "https://images.unsplash.com/photo-1529778873920-4da4926a72c2?w=400&q=80",
+                "小狗": "https://images.unsplash.com/photo-1582456891925-a53965520520?w=400&q=80",
+                "狮子": "https://images.unsplash.com/photo-1546182990-dffeafbe841d?w=400&q=80",
+                "老虎": "https://images.unsplash.com/photo-1503066211613-c17ebc9daef0?w=400&q=80",
+            },
+            4: {
+                "兔子": "https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?w=400&q=80",
+                "猫咪": "https://images.unsplash.com/photo-1529778873920-4da4926a72c2?w=400&q=80",
+                "小狗": "https://images.unsplash.com/photo-1582456891925-a53965520520?w=400&q=80",
+                "狮子": "https://images.unsplash.com/photo-1546182990-dffeafbe841d?w=400&q=80",
+                "老虎": "https://images.unsplash.com/photo-1503066211613-c17ebc9daef0?w=400&q=80",
+                "苹果": "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400&q=80",
+                "香蕉": "https://images.unsplash.com/photo-1528825876-015889741c1b?w=400&q=80",
+            }
+        };
+
+        const MAX_LEVEL = Object.keys(LEVEL_RESOURCES).length;
+
+        // ============================================================
+        // 2) 音频引擎
+        // ============================================================
+        class SimpleMusicEngine {
+            constructor() {
+                this.audioContext = null;
+                this.masterGainNode = null;
+                this._bgInterval = null;
+
+                if (typeof window !== "undefined") {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new Ctx();
+                    this.masterGainNode = this.audioContext.createGain();
+                    this.masterGainNode.connect(this.audioContext.destination);
+                    this.masterGainNode.gain.value = 0.3;
+                }
+            }
+
+            async ensureRunning() {
+                if (!this.audioContext) return;
+                if (this.audioContext.state === "suspended") {
+                    try { await this.audioContext.resume(); } catch {}
+                }
+            }
+
+            setVolume(v) { if (this.masterGainNode) this.masterGainNode.gain.value = v; }
+
+            playBeat() {
+                if (!this.audioContext || !this.masterGainNode) return;
+                const osc = this.audioContext.createOscillator();
+                const gain = this.audioContext.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(800, this.audioContext.currentTime);
+                gain.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(this.masterGainNode);
+                osc.start();
+                osc.stop(this.audioContext.currentTime + 0.1);
+            }
+
+            startBackgroundMusic(bpm = 120) {
+                if (!this.audioContext || !this.masterGainNode) return;
+                this.stopBackgroundMusic();
+                const beatDuration = (60 / bpm) * 1000;
+                const playLoop = () => {
+                    const freqs = [261.63, 329.63, 392.0, 329.63]; // C-E-G-E
+                    freqs.forEach((f, i) => {
+                        setTimeout(() => {
+                            const osc = this.audioContext.createOscillator();
+                            const g = this.audioContext.createGain();
+                            osc.frequency.value = f;
+                            g.gain.setValueAtTime(0.05, this.audioContext.currentTime);
+                            g.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
+                            osc.connect(g);
+                            g.connect(this.masterGainNode);
+                            osc.start();
+                            osc.stop(this.audioContext.currentTime + 0.3);
+                        }, i * (beatDuration / 4));
+                    });
+                };
+                playLoop();
+                this._bgInterval = setInterval(playLoop, beatDuration);
+            }
+
+            stopBackgroundMusic() {
+                if (this._bgInterval) clearInterval(this._bgInterval);
+                this._bgInterval = null;
+            }
+        }
+
+        // ============================================================
+        // 3) 子组件
+        // ============================================================
+        function AnimalCard({ imageUrl, label, isActive }) {
+            return React.createElement("div", {
+                className: `relative aspect-square rounded-xl overflow-hidden border-4 transition-all duration-300 ${
+                    isActive ? "border-yellow-400 shadow-[0_0_40px_rgba(250,204,21,0.9)] scale-110 z-10" : "border-white/20 scale-100 opacity-80"
+                }`
+            },
+                React.createElement("img", { src: imageUrl, alt: label, className: "w-full h-full object-cover" }),
+                // 遮罩层：仅显示激活颜色，不再渲染文字 Label
+                React.createElement("div", {
+                    className: `absolute inset-0 transition-opacity ${isActive ? "opacity-100 bg-yellow-400/20" : "opacity-0"}`
+                })
+            );
+        }
+
+        function Modal({ title, children, isOpen }) {
+            if (!isOpen) return null;
+            return React.createElement("div", {
+                className: "fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
+            },
+                React.createElement("div", { className: "bg-white rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl animate-pulse-slow" },
+                    React.createElement("h2", { className: "text-4xl font-black text-purple-600" }, title),
+                    children
+                )
+            );
+        }
+
+        // ============================================================
+        // 4) 主程序
+        // ============================================================
+        function App() {
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [currentLevel, setCurrentLevel] = useState(1);
+            const [currentIndex, setCurrentIndex] = useState(-1);
+            const [volume, setVolume] = useState(0.3);
+            const [bpm, setBpm] = useState(120);
+            const [showEndModal, setShowEndModal] = useState(false);
+            const [cards, setCards] = useState([]);
+
+            const engineRef = useRef(null);
+            const timerRef = useRef(null);
+
+            if (!engineRef.current) engineRef.current = new SimpleMusicEngine();
+
+            // 核心逻辑：生成 16 张卡片
+            const generateCards = useCallback((level) => {
+                const pool = LEVEL_RESOURCES[level] || LEVEL_RESOURCES[1];
+                const keys = Object.keys(pool);
+                const newCards = [];
+                for (let i = 0; i < 16; i++) {
+                    const randomKey = keys[Math.floor(Math.random() * keys.length)];
+                    newCards.push({ label: randomKey, imageUrl: pool[randomKey] });
+                }
+                setCards(newCards);
+                setCurrentIndex(-1);
+            }, []);
+
+            // 初始化第一关
+            useEffect(() => {
+                generateCards(1);
+            }, [generateCards]);
+
+            // 音量更新
+            useEffect(() => engineRef.current.setVolume(volume), [volume]);
+
+            // 节奏器主循环
+            useEffect(() => {
+                const engine = engineRef.current;
+                if (!isPlaying) {
+                    engine.stopBackgroundMusic();
+                    if (timerRef.current) clearInterval(timerRef.current);
+                    return;
+                }
+
+                (async () => {
+                    await engine.ensureRunning();
+                    engine.startBackgroundMusic(bpm);
+                    
+                    const beatMs = (60 / bpm) * 1000;
+                    setCurrentIndex(0);
+                    engine.playBeat();
+
+                    timerRef.current = setInterval(() => {
+                        setCurrentIndex(prev => {
+                            const next = prev + 1;
+                            // 检查是否到达该轮末尾
+                            if (next >= cards.length) {
+                                setIsPlaying(false); // 停止播放
+                                setShowEndModal(true); // 弹出关卡结束
+                                return prev; 
+                            }
+                            engine.playBeat();
+                            return next;
+                        });
+                    }, beatMs);
+                })();
+
+                return () => {
+                    if (timerRef.current) clearInterval(timerRef.current);
+                    engine.stopBackgroundMusic();
+                };
+            }, [isPlaying, bpm, cards.length]);
+
+            // --- 交互处理 ---
+            const handleReplay = () => {
+                setShowEndModal(false);
+                generateCards(currentLevel); // 重新洗牌当前关卡
+                setIsPlaying(true);
+            };
+
+            const handleNextLevel = () => {
+                setShowEndModal(false);
+                const next = currentLevel >= MAX_LEVEL ? 1 : currentLevel + 1;
+                setCurrentLevel(next);
+                generateCards(next); // 切换新素材池并生成
+                setIsPlaying(true);
+            };
+
+            const togglePlay = () => {
+                if (showEndModal) return;
+                setIsPlaying(!isPlaying);
+            };
+
+            return React.createElement("div", {
+                className: "min-h-screen bg-neutral-900 text-white p-4 md:p-8 font-sans selection:bg-purple-500"
+            },
+                // 顶部信息
+                React.createElement("div", { className: "max-w-6xl mx-auto space-y-8" },
+                    React.createElement("div", { className: "flex flex-col md:flex-row justify-between items-center gap-6" },
+                        React.createElement("div", null,
+                            React.createElement("h1", { className: "text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-500" }, "BEAT IT OUT!"),
+                            React.createElement("div", { className: "flex items-center gap-2 mt-2" },
+                                React.createElement("span", { className: "px-3 py-1 bg-purple-600 rounded-full text-xs font-bold" }, `LEVEL ${currentLevel}`),
+                                React.createElement("p", { className: "text-neutral-400" }, "跟着节奏大声读出图片的名字！")
+                            )
+                        ),
+                        // 控制栏
+                        React.createElement("div", { className: "flex flex-wrap items-center gap-4 bg-white/5 p-4 rounded-2xl backdrop-blur-sm border border-white/10" },
+                            React.createElement("button", {
+                                onClick: togglePlay,
+                                className: `px-8 py-3 rounded-xl font-bold transition-all ${
+                                    isPlaying ? "bg-red-500 hover:bg-red-600" : "bg-purple-600 hover:bg-purple-700"
+                                }`
+                            }, isPlaying ? "暂停" : "开始闯关"),
+                            
+                            React.createElement("div", { className: "flex items-center gap-4 border-l border-white/10 pl-4" },
+                                React.createElement("div", { className: "w-32" },
+                                    React.createElement("label", { className: "block text-[10px] uppercase text-neutral-500 mb-1" }, `BPM: ${bpm}`),
+                                    React.createElement("input", {
+                                        type: "range", min: 60, max: 200, step: 10, value: bpm,
+                                        onChange: e => setBpm(parseInt(e.target.value)),
+                                        disabled: isPlaying,
+                                        className: "w-full cursor-pointer disabled:opacity-30"
+                                    })
+                                ),
+                                React.createElement("div", { className: "w-24" },
+                                    React.createElement("label", { className: "block text-[10px] uppercase text-neutral-500 mb-1" }, `音量: ${Math.round(volume*100)}%`),
+                                    React.createElement("input", {
+                                        type: "range", min: 0, max: 1, step: 0.1, value: volume,
+                                        onChange: e => setVolume(parseFloat(e.target.value)),
+                                        className: "w-full cursor-pointer"
+                                    })
+                                )
+                            )
+                        )
+                    ),
+
+                    // 核心网格
+                    React.createElement("div", { className: "grid grid-cols-4 md:grid-cols-8 gap-4" },
+                        cards.map((card, i) => React.createElement(AnimalCard, {
+                            key: `${currentLevel}-${i}`,
+                            imageUrl: card.imageUrl,
+                            label: card.label,
+                            isActive: currentIndex === i
+                        }))
+                    ),
+
+                    // 进度条
+                    React.createElement("div", { className: "w-full h-2 bg-white/10 rounded-full overflow-hidden" },
+                        React.createElement("div", {
+                            className: "h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300",
+                            style: { width: `${((currentIndex + 1) / cards.length) * 100}%` }
+                        })
+                    )
+                ),
+
+                // 关卡结束弹窗
+                React.createElement(Modal, {
+                    title: "🎉 关卡完成!",
+                    isOpen: showEndModal
+                },
+                    React.createElement("p", { className: "text-neutral-600 text-lg" }, 
+                        currentLevel >= MAX_LEVEL ? "你已经通关了所有关卡！太棒了！" : "你完成得非常好，准备好迎接更高难度的挑战了吗？"
+                    ),
+                    React.createElement("div", { className: "flex flex-col gap-3" },
+                        React.createElement("button", {
+                            onClick: handleNextLevel,
+                            className: "w-full py-4 bg-purple-600 text-white rounded-2xl font-black text-xl hover:bg-purple-700 transition-transform active:scale-95 shadow-lg shadow-purple-200"
+                        }, currentLevel >= MAX_LEVEL ? "从头开始" : "进入下一关"),
+                        React.createElement("button", {
+                            onClick: handleReplay,
+                            className: "w-full py-3 bg-neutral-100 text-neutral-500 rounded-2xl font-bold hover:bg-neutral-200 transition-colors"
+                        }, "重玩本关 (重新洗牌)")
+                    )
+                )
+            );
+        }
+
+        createRoot(document.getElementById("root")).render(React.createElement(App));
+    </script>
+</body>
+</html>
