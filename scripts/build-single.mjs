@@ -24,21 +24,37 @@ function resolveDistAsset(hrefOrSrc) {
   return path.resolve(distDir, cleaned)
 }
 
-async function inlineCss(html) {
-  // Inline all stylesheet links that point to dist assets
-  const linkRe =
-    /<link\b([^>]*?)rel=["']stylesheet["']([^>]*?)href=["']([^"']+)["']([^>]*?)>/gi
+function parseTagAttributes(tag) {
+  // Parses attributes from a start-tag string into a map.
+  // Supports: key="value", key='value', key=value, and boolean attributes.
+  const attrs = new Map()
+  const re = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g
+  for (const m of tag.matchAll(re)) {
+    const key = m[1].toLowerCase()
+    const value = m[2] ?? m[3] ?? m[4] ?? ''
+    attrs.set(key, value)
+  }
+  return attrs
+}
 
-  const matches = [...html.matchAll(linkRe)]
-  for (const m of matches) {
-    const fullTag = m[0]
-    const href = m[3]
-    if (isExternalUrl(href)) continue
+async function inlineCss(html) {
+  // Inline all <link ...> tags where rel=stylesheet and href points to dist assets.
+  const linkTagRe = /<link\b[^>]*?>/gi
+  const tags = [...html.matchAll(linkTagRe)].map((m) => m[0])
+
+  for (const fullTag of tags) {
+    const attrs = parseTagAttributes(fullTag)
+    const rel = (attrs.get('rel') ?? '').toLowerCase()
+    if (rel !== 'stylesheet') continue
+
+    const href = attrs.get('href') ?? ''
+    if (!href || isExternalUrl(href)) continue
 
     const cssPath = resolveDistAsset(href)
     const css = await readText(cssPath)
     const styleTag = `<style>\n${css}\n</style>`
-    html = html.replace(fullTag, styleTag)
+    // Use a function replacement so `$` sequences in CSS aren't interpreted by String.replace.
+    html = html.replace(fullTag, () => styleTag)
   }
 
   return html
@@ -50,20 +66,31 @@ function removeModulePreloads(html) {
 }
 
 async function inlineModuleScripts(html) {
-  // Inline <script type="module" src="..."></script>
-  const scriptRe =
-    /<script\b([^>]*?)type=["']module["']([^>]*?)src=["']([^"']+)["']([^>]*)>\s*<\/script>/gi
+  // Inline <script ...></script> tags where type=module and src points to dist assets.
+  const scriptTagRe = /<script\b[^>]*?>\s*<\/script>/gi
+  const tags = [...html.matchAll(scriptTagRe)].map((m) => m[0])
 
-  const matches = [...html.matchAll(scriptRe)]
-  for (const m of matches) {
-    const fullTag = m[0]
-    const src = m[3]
-    if (isExternalUrl(src)) continue
+  for (const fullTag of tags) {
+    const openTag = fullTag.replace(/<\/script>\s*$/i, '')
+    const attrs = parseTagAttributes(openTag)
+    const type = (attrs.get('type') ?? '').toLowerCase()
+    if (type !== 'module') continue
+
+    const src = attrs.get('src') ?? ''
+    if (!src || isExternalUrl(src)) continue
 
     const jsPath = resolveDistAsset(src)
-    const js = await readText(jsPath)
+    let js = await readText(jsPath)
+    // Remove sourcemap references to avoid 404 noise when opening the single file.
+    js = js.replace(/^\s*\/\/# sourceMappingURL=.*$/gm, '').trimEnd()
+    // IMPORTANT: Prevent the HTML parser from prematurely terminating the inline script
+    // if the JS bundle contains a literal "</script" substring (even inside strings).
+    js = js.replace(/<\/script/gi, '<\\/script')
+
     const inlineTag = `<script type="module">\n${js}\n</script>`
-    html = html.replace(fullTag, inlineTag)
+    // Use a function replacement so `$` sequences in the JS bundle aren't interpreted
+    // (e.g. "$&" would otherwise expand to the matched substring and corrupt the bundle).
+    html = html.replace(fullTag, () => inlineTag)
   }
 
   return html

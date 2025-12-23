@@ -114,10 +114,10 @@ export default function App() {
         <div className="text-center space-y-4">
           <div className="flex items-center justify-center gap-3">
             <Music2 className="w-12 h-12 text-white" />
-            <h1 className="text-white text-5xl">猫狗节奏游戏</h1>
+            <h1 className="text-white text-5xl">Beat it out!</h1>
             <Music2 className="w-12 h-12 text-white" />
           </div>
-          <p className="text-white text-xl">每个节拍按顺序点亮一张随机的猫咪或狗狗图片</p>
+          <p className="text-white text-xl">Name the lighted picture!</p>
         </div>
 
         {/* Controls */}
