@@ -12,3 +12,5 @@ node -v
 npm install
 npm run build:single
 ```
+
+Or juts click single.html~

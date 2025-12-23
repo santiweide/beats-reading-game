@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>节奏卡片游戏 - Beat It Out</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.3.1",
+            "react-dom": "https://esm.sh/react-dom@18.3.1/client",
+            "framer-motion": "https://esm.sh/framer-motion@11.11.11",
+            "lucide-react": "https://esm.sh/lucide-react@0.454.0"
+        }
+    }
+    </script>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom';
+        import { motion, AnimatePresence } from 'framer-motion';
+        import { Music, Play, Pause, RotateCcw } from 'lucide-react';
+
+        // ==========================================
+        // 1. 音频引擎逻辑 (Web Audio API)
+        // ==========================================
+        class GameAudioEngine {
+            constructor() {
+                this.audioContext = null;
+                this.masterGain = null;
+                this.init();
+            }
+
+            init() {
+                if (typeof window !== 'undefined') {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.masterGain = this.audioContext.createGain();
+                    this.masterGain.connect(this.audioContext.destination);
+                    this.masterGain.gain.value = 0.3;
+                }
+            }
+
+            // 播放节拍音效
+            playBeat() {
+                if (!this.audioContext) return;
+                const osc = this.audioContext.createOscillator();
+                const gain = this.audioContext.createGain();
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, this.audioContext.currentTime);
+                
+                gain.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+                
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start();
+                osc.stop(this.audioContext.currentTime + 0.1);
+            }
+
+            setVolume(value) {
+                if (this.masterGain) this.masterGain.gain.value = value;
+            }
+        }
+
+        // ==========================================
+        // 2. UI 子组件
+        // ==========================================
+        
+        // 游戏卡片组件
+        const GameCard = ({ imageUrl, type, isActive }) => (
+            <motion.div
+                className={`relative aspect-square rounded-lg overflow-hidden border-4 transition-all duration-200 
+                    ${isActive ? "border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.8)]" : "border-gray-300"}`}
+                animate={{ scale: isActive ? 1.1 : 1, zIndex: isActive ? 10 : 1 }}
+            >
+                <img src={imageUrl} alt={type} className="w-full h-full object-cover" />
+                <div className={`absolute inset-0 transition-opacity ${isActive ? "bg-yellow-400/20" : "bg-transparent"}`} />
+            </motion.div>
+        );
+
+        // ==========================================
+        // 3. 主应用程序 (App)
+        // ==========================================
+        function App() {
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [activeIndex, setActiveIndex] = useState(-1);
+            const [volume, setVolume] = useState(0.3);
+            const [bpm, setBpm] = useState(120);
+            
+            const audioEngine = useRef(new GameAudioEngine());
+
+            // 预设图片库
+            const IMAGES = {
+                cats: [
+                    "https://images.unsplash.com/photo-1529778873920-4da4926a72c2?q=80&w=400",
+                    "https://images.unsplash.com/photo-1560114928-40f1f1eb26a0?q=80&w=400",
+                    "https://images.unsplash.com/photo-1647806422508-0322f33e270b?q=80&w=400"
+                ],
+                dogs: [
+                    "https://images.unsplash.com/photo-1582456891925-a53965520520?q=80&w=400",
+                    "https://images.unsplash.com/photo-1601979031925-424e53b6caaa?q=80&w=400",
+                    "https://images.unsplash.com/photo-1558788353-f76d92427f16?q=80&w=400"
+                ]
+            };
+
+            // 初始化16张随机卡片数据
+            const cardData = useMemo(() => {
+                return Array.from({ length: 16 }).map(() => {
+                    const isCat = Math.random() > 0.5;
+                    const list = isCat ? IMAGES.cats : IMAGES.dogs;
+                    return {
+                        type: isCat ? "cat" : "dog",
+                        imageUrl: list[Math.floor(Math.random() * list.length)]
+                    };
+                });
+            }, []);
+
+            // 控制循环播放逻辑
+            useEffect(() => {
+                let timer;
+                if (isPlaying) {
+                    setActiveIndex(0);
+                    const interval = (60 / bpm) * 1000;
+
+                    timer = setInterval(() => {
+                        setActiveIndex(prev => (prev + 1) % cardData.length);
+                        audioEngine.current.playBeat();
+                    }, interval);
+                } else {
+                    setActiveIndex(-1);
+                }
+                return () => clearInterval(timer);
+            }, [isPlaying, bpm, cardData.length]);
+
+            const handleReset = () => {
+                setIsPlaying(false);
+                setActiveIndex(-1);
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-pink-300 via-purple-300 to-indigo-400 p-8 font-sans">
+                    <div className="max-w-6xl mx-auto space-y-8">
+                        
+                        {/* 标题栏 */}
+                        <header className="text-center space-y-2">
+                            <div className="flex items-center justify-center gap-4">
+                                <Music className="w-10 h-10 text-white animate-bounce" />
+                                <h1 className="text-white text-5xl font-black tracking-tight">BEAT IT OUT</h1>
+                                <Music className="w-10 h-10 text-white animate-bounce" />
+                            </div>
+                            <p className="text-white/90 text-xl font-medium">跟随节奏，点亮你的灵感！</p>
+                        </header>
+
+                        {/* 控制面板 */}
+                        <section className="bg-white/20 backdrop-blur-xl rounded-3xl p-8 shadow-2xl border border-white/30">
+                            <div className="flex flex-wrap items-center justify-between gap-8">
+                                
+                                {/* 按钮组 */}
+                                <div className="flex items-center gap-4">
+                                    <button 
+                                        onClick={() => setIsPlaying(!isPlaying)}
+                                        className={`flex items-center gap-2 px-10 py-4 rounded-full text-xl font-bold transition-all shadow-lg
+                                            ${isPlaying ? "bg-red-500 hover:bg-red-600 text-white" : "bg-gradient-to-r from-yellow-400 to-orange-500 hover:scale-105 text-white"}`}
+                                    >
+                                        {isPlaying ? <><Pause /> 暂停</> : <><Play /> 开始播放</>}
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={handleReset}
+                                        className="flex items-center gap-2 px-6 py-4 rounded-full bg-white/40 hover:bg-white/60 text-gray-800 font-semibold transition-all shadow-md"
+                                    >
+                                        <RotateCcw className="w-5 h-5" /> 重置
+                                    </button>
+                                </div>
+
+                                {/* 滑动条组 */}
+                                <div className="flex gap-8 flex-1 max-w-xl">
+                                    <div className="flex-1 space-y-2">
+                                        <label className="text-white text-sm font-bold flex justify-between">
+                                            <span>节奏 (BPM): {bpm}</span>
+                                            <span className="opacity-70">{(60000/bpm).toFixed(0)}ms/拍</span>
+                                        </label>
+                                        <input 
+                                            type="range" min="60" max="240" step="10" 
+                                            value={bpm} onChange={(e) => setBpm(e.target.value)}
+                                            disabled={isPlaying}
+                                            className="w-full h-2 bg-white/30 rounded-lg appearance-none cursor-pointer accent-purple-600 disabled:opacity-50"
+                                        />
+                                    </div>
+                                    
+                                    <div className="flex-1 space-y-2">
+                                        <label className="text-white text-sm font-bold">音量: {Math.round(volume * 100)}%</label>
+                                        <input 
+                                            type="range" min="0" max="1" step="0.01" 
+                                            value={volume} onChange={(e) => {
+                                                const v = parseFloat(e.target.value);
+                                                setVolume(v);
+                                                audioEngine.current.setVolume(v);
+                                            }}
+                                            className="w-full h-2 bg-white/30 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* 卡片网格 */}
+                        <main className="bg-black/10 backdrop-blur-md rounded-3xl p-10 shadow-inner border border-white/10">
+                            <div className="grid grid-cols-4 md:grid-cols-8 gap-6">
+                                {cardData.map((card, index) => (
+                                    <GameCard 
+                                        key={index}
+                                        imageUrl={card.imageUrl}
+                                        type={card.type}
+                                        isActive={activeIndex === index}
+                                    />
+                                ))}
+                            </div>
+                        </main>
+
+                        {/* 说明页脚 */}
+                        <footer className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 text-white/80 border border-white/5">
+                            <h3 className="text-lg font-bold mb-2 flex items-center gap-2 text-white">
+                                <span className="bg-white/20 p-1 rounded">i</span> 玩法说明
+                            </h3>
+                            <ul className="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm leading-relaxed">
+                                <li>• 停止状态下调整 <strong>BPM</strong> 设置速度</li>
+                                <li>• 点击播放后，卡片将按 <strong>Z字型</strong> 顺序点亮</li>
+                                <li>• 每次点亮都会伴随 <strong>800Hz</strong> 的正弦波节拍音效</li>
+                                <li>• 观察亮起的图片，大声喊出它是猫还是狗吧！</li>
+                            </ul>
+                        </footer>
+                    </div>
+                </div>
+            );
+        }
+
+        // 渲染应用
+        const container = document.getElementById('root');
+        const root = createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
